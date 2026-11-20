@@ -78,19 +78,32 @@ jobs:
           docker compose up -d --wait --wait-timeout 180
           bash tests/smoke.sh
 
-      - name: Capture screenshots
-        if: github.event_name == 'workflow_dispatch' && inputs.screenshots
+      - name: Dashboard renders in a real browser (and screenshots)
         run: |
-          sleep 240 # let the demo load build up a few minutes of history
+          # Check the UI's JavaScript bundle is served through the proxy.
+          curl -fsSk https://localhost/ -o /tmp/index.html
+          asset=$(grep -m1 -oE 'public/build/[^"]+\.js' /tmp/index.html)
+          curl -fsSk -o /dev/null -w "asset /$asset -> %{http_code} %{content_type}\n" "https://localhost/$asset"
+          # On manual runs, let the demo load build up a few minutes of history first.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then sleep 240; fi
           pip install --quiet playwright==1.55.0
           python -m playwright install --with-deps chromium > /dev/null
           python scripts/screenshots.py https://localhost
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: screenshots
+          path: docs/screenshots/
+          if-no-files-found: ignore
 
       - name: Commit screenshots
         if: github.event_name == 'workflow_dispatch' && inputs.screenshots
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f docs/screenshots/FAILED-*
           git add docs/screenshots
           git commit -m "Update dashboard screenshots [skip ci]" || echo "No changes"
           git push
