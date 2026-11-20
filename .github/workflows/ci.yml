@@ -1,0 +1,106 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      screenshots:
+        description: Capture dashboard screenshots and commit them to docs/screenshots
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate compose file
+        run: GRAFANA_ADMIN_PASSWORD=ci docker compose --profile demo config --quiet
+
+      - name: Check Prometheus config and alert rules
+        run: >-
+          docker run --rm -v "$PWD/prometheus:/etc/prometheus:ro"
+          --entrypoint promtool prom/prometheus:v3.5.0
+          check config /etc/prometheus/prometheus.yml
+
+      - name: Check Caddyfile
+        run: >-
+          docker run --rm -v "$PWD/caddy/Caddyfile:/etc/caddy/Caddyfile:ro"
+          caddy:2.10-alpine caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile > /dev/null
+
+      - name: Check dashboard JSON
+        run: jq -e '.uid == "docker-monitoring" and (.panels | length > 0)' grafana/dashboards/docker-monitoring.json
+
+      - name: shellcheck
+        run: shellcheck scripts/*.sh tests/*.sh
+
+  e2e:
+    needs: lint
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # only used to commit screenshots on manual runs
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Enable Docker engine metrics
+        run: |
+          sudo mkdir -p /etc/docker
+          [ -f /etc/docker/daemon.json ] || echo '{}' | sudo tee /etc/docker/daemon.json > /dev/null
+          jq -s '.[0] * .[1]' /etc/docker/daemon.json docker/daemon.json > /tmp/daemon.json
+          sudo mv /tmp/daemon.json /etc/docker/daemon.json
+          sudo systemctl restart docker
+          curl -fsS --retry 10 --retry-connrefused -o /tmp/engine-metrics http://127.0.0.1:9323/metrics
+          grep -q engine_daemon_container_states_containers /tmp/engine-metrics
+
+      - name: Start the stack
+        run: |
+          cp .env.example .env
+          sed -i 's/^GRAFANA_ADMIN_PASSWORD=.*/GRAFANA_ADMIN_PASSWORD=ci-only-password/' .env
+          docker compose up -d --wait --wait-timeout 300
+          docker compose ps
+
+      - name: Smoke tests
+        run: bash tests/smoke.sh
+
+      - name: Survives a restart
+        run: |
+          docker compose restart prometheus grafana caddy
+          docker compose up -d --wait --wait-timeout 180
+          bash tests/smoke.sh
+
+      - name: Capture screenshots
+        if: github.event_name == 'workflow_dispatch' && inputs.screenshots
+        run: |
+          sleep 240 # let the demo load build up a few minutes of history
+          pip install --quiet playwright==1.55.0
+          python -m playwright install --with-deps chromium > /dev/null
+          python scripts/screenshots.py https://localhost
+
+      - name: Commit screenshots
+        if: github.event_name == 'workflow_dispatch' && inputs.screenshots
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/screenshots
+          git commit -m "Update dashboard screenshots [skip ci]" || echo "No changes"
+          git push
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          docker compose ps -a
+          docker compose logs --tail=100
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
