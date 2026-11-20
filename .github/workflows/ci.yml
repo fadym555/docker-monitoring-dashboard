@@ -79,6 +79,7 @@ jobs:
           bash tests/smoke.sh
 
       - name: Dashboard renders in a real browser (and screenshots)
+        timeout-minutes: 15
         run: |
           # Check the UI's JavaScript bundle is served through the proxy.
           curl -fsSk https://localhost/ -o /tmp/index.html
@@ -88,7 +89,7 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then sleep 240; fi
           pip install --quiet playwright==1.55.0
           python -m playwright install --with-deps chromium > /dev/null
-          python scripts/screenshots.py https://localhost
+          python -u scripts/screenshots.py https://localhost
 
       - name: Upload screenshots
         if: always()
