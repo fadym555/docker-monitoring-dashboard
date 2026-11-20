@@ -30,24 +30,27 @@ with sync_playwright() as p:
             locale="en-US",
             timezone_id="UTC",
         )
+        page.set_default_timeout(60_000)
         page.on("requestfailed", lambda r: problems.append(f"request failed: {r.url} {r.failure}"))
         page.on("response", lambda r: r.status >= 400 and problems.append(f"HTTP {r.status}: {r.url}"))
         page.on("console", lambda m: m.type == "error" and problems.append(f"console: {m.text}"))
         page.on("pageerror", lambda e: problems.append(f"page error: {e}"))
 
-        page.goto(URL, wait_until="networkidle", timeout=90_000)
+        print(f"[{name}] opening dashboard", flush=True)
+        page.goto(URL, wait_until="domcontentloaded")
         try:
             # The first row title only exists once the dashboard has rendered.
-            page.get_by_text("Executive overview").first.wait_for(timeout=90_000)
+            page.get_by_text("Executive overview").first.wait_for()
+            print(f"[{name}] dashboard rendered", flush=True)
         except Exception:
             page.screenshot(path=str(OUT / f"FAILED-{name}"))
-            print("Dashboard did not render. Problems seen:")
+            print("Dashboard did not render. Problems seen:", flush=True)
             for line in dict.fromkeys(problems):
                 print("  ", line)
             sys.exit(1)
 
         page.wait_for_timeout(10_000)  # let every panel finish drawing
-        page.screenshot(path=str(OUT / name))
+        page.screenshot(path=str(OUT / name), timeout=60_000)
         page.close()
         print(f"saved {OUT / name}")
     browser.close()
