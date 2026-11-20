@@ -1,0 +1,225 @@
+name: docker-monitoring
+
+# Shared defaults: restart on failure and keep logs from filling the disk.
+x-defaults: &defaults
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  # ---------- Public entry point (HTTPS) ----------
+  caddy:
+    <<: *defaults
+    image: caddy:2.10-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      grafana:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2019/config/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: { cpus: "0.50", memory: 128M }
+    networks: [edge]
+
+  # ---------- Dashboard ----------
+  grafana:
+    <<: *defaults
+    image: grafana/grafana:12.1.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_SERVER_ROOT_URL: https://${DOMAIN:-localhost}/
+      # Public visitors can view dashboards but never edit or log in.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/docker-monitoring.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      # Admin access only through an SSH tunnel, never public.
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits: { cpus: "0.50", memory: 256M }
+    networks: [edge, monitoring]
+
+  # ---------- Metrics storage ----------
+  prometheus:
+    <<: *defaults
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    extra_hosts:
+      # Lets Prometheus reach the Docker engine metrics endpoint on the host.
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:9090:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: { cpus: "0.50", memory: 512M }
+    networks: [monitoring]
+
+  # ---------- Collectors ----------
+  cadvisor:
+    <<: *defaults
+    image: ghcr.io/google/cadvisor:v0.61.1
+    command:
+      - --docker_only=true
+      - --housekeeping_interval=10s
+      - --store_container_labels=false
+      - --disable_metrics=percpu,sched,tcp,udp,disk,diskIO,hugetlb,referenced_memory,cpu_topology,resctrl,process
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    deploy:
+      resources:
+        limits: { cpus: "0.50", memory: 256M }
+    networks: [monitoring]
+
+  node-exporter:
+    <<: *defaults
+    image: prom/node-exporter:v1.9.1
+    command:
+      - --path.rootfs=/host
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9100/metrics"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 64M }
+    networks: [monitoring]
+
+  # ---------- Demo workloads (profile: demo) ----------
+  # Sample services so the dashboard has something to show.
+  # Leave COMPOSE_PROFILES empty in .env to run only the monitoring stack.
+  demo-web:
+    <<: *defaults
+    image: nginx:1.27-alpine
+    profiles: [demo]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 64M }
+    networks: [demo]
+
+  demo-api:
+    <<: *defaults
+    image: python:3.12-alpine
+    profiles: [demo]
+    command: ["python", "/app/app.py"]
+    read_only: true
+    volumes:
+      - ./demo/app.py:/app/app.py:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: { cpus: "0.50", memory: 96M }
+    networks: [demo]
+
+  demo-cache:
+    <<: *defaults
+    image: redis:7.4-alpine
+    profiles: [demo]
+    command: ["redis-server", "--save", "", "--maxmemory", "48mb"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 64M }
+    networks: [demo]
+
+  demo-loadgen:
+    <<: *defaults
+    image: busybox:1.37
+    profiles: [demo]
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          wget -qO- http://demo-api:8000/work > /dev/null
+          wget -qO- http://demo-web/ > /dev/null
+          sleep 1
+        done
+    depends_on:
+      demo-api:
+        condition: service_healthy
+      demo-web:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits: { cpus: "0.10", memory: 16M }
+    networks: [demo]
+
+networks:
+  edge:
+  monitoring:
+  demo:
+
+volumes:
+  caddy-data:
+  caddy-config:
+  grafana-data:
+  prometheus-data:
