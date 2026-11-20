@@ -82,7 +82,7 @@ jobs:
         run: |
           # Check the UI's JavaScript bundle is served through the proxy.
           curl -fsSk https://localhost/ -o /tmp/index.html
-          asset=$(grep -m1 -oE 'public/build/[^"]+\.js' /tmp/index.html)
+          asset=$(grep -oE 'public/build/app\.[^"]+\.js' /tmp/index.html | sed -n 1p)
           curl -fsSk -o /dev/null -w "asset /$asset -> %{http_code} %{content_type}\n" "https://localhost/$asset"
           # On manual runs, let the demo load build up a few minutes of history first.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then sleep 240; fi
