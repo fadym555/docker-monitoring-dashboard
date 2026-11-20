@@ -26,6 +26,9 @@ with sync_playwright() as p:
         page = browser.new_page(
             viewport={"width": width, "height": height},
             ignore_https_errors=True,
+            # CI runners report "en-US@posix", which Grafana cannot parse.
+            locale="en-US",
+            timezone_id="UTC",
         )
         page.on("requestfailed", lambda r: problems.append(f"request failed: {r.url} {r.failure}"))
         page.on("response", lambda r: r.status >= 400 and problems.append(f"HTTP {r.status}: {r.url}"))
