@@ -1,0 +1,28 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # Prometheus itself
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Per-container CPU, memory and network
+  - job_name: cadvisor
+    scrape_interval: 10s
+    static_configs:
+      - targets: ["cadvisor:8080"]
+
+  # Host CPU, memory, disk, uptime
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  # Docker engine: running / stopped container counts, container starts
+  - job_name: docker
+    static_configs:
+      - targets: ["host.docker.internal:9323"]
