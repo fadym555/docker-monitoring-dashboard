@@ -291,7 +291,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "100 * engine_daemon_container_states_containers{state=\"running\"} / clamp_min(sum(engine_daemon_container_states_containers), 1)",
+          "expr": "100 * sum(engine_daemon_container_states_containers{state=\"running\"}) / clamp_min(sum(engine_daemon_container_states_containers), 1)",
           "refId": "A",
           "instant": true
         }
