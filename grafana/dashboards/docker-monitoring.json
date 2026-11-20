@@ -86,7 +86,7 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "Total containers",
+      "title": "Total",
       "gridPos": {
         "h": 4,
         "w": 3,
@@ -473,7 +473,7 @@
     {
       "id": 8,
       "type": "stat",
-      "title": "Network throughput",
+      "title": "Network I/O",
       "gridPos": {
         "h": 4,
         "w": 3,
@@ -905,7 +905,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "(time() - container_last_seen{name=~\"$container\"}) < bool 30",
+          "expr": "max by (name) ((time() - container_last_seen{name=~\"$container\"}) < bool 30)",
           "refId": "A",
           "instant": true,
           "format": "table"
@@ -971,7 +971,11 @@
           "id": "organize",
           "options": {
             "excludeByName": {
-              "Time": true
+              "Time": true,
+              "id": true,
+              "image": true,
+              "instance": true,
+              "job": true
             },
             "indexByName": {
               "name": 0,
@@ -1161,6 +1165,18 @@
               {
                 "id": "decimals",
                 "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Container"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 300
               }
             ]
           }
